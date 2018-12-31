@@ -57,6 +57,10 @@ function utc(year, month, date) {
   return new Date(Date.UTC(year, month, date));
 }
 
+function daysInMonth(year, month) {
+  return new Date(year, month + 1, 0).getDate();
+}
+
 function dateAtStartOfDay(year, month, day) {
   const date = utc(year, month, day);
   const tzOffset = date.getTimezoneOffset();
@@ -200,6 +204,7 @@ export {
   lastDayOfMonth,
   startOfDay,
   format,
+  daysInMonth,
   formatIsoDate,
   formatIsoMonth,
   parseIsoDate,

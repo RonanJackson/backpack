@@ -22,12 +22,7 @@ import React from 'react';
 import { cssModules } from 'bpk-react-utils';
 import { DateUtils, BpkCalendarGridPropTypes } from 'bpk-component-calendar';
 import { startOfDay, startOfMonth, isSameMonth } from 'date-fns';
-import {
-  AutoSizer,
-  List,
-  CellMeasurer,
-  CellMeasurerCache,
-} from 'react-virtualized';
+import { VariableSizeList as List } from 'react-window';
 
 import STYLES from './bpk-scrollable-calendar-grid-list.scss';
 import BpkScrollableCalendarGrid from './BpkScrollableCalendarGrid';
@@ -35,12 +30,17 @@ import getMonthsArray from './utils';
 
 const getClassName = cssModules(STYLES);
 
+const ROW_HEIGHT = 42;
+const GRID_HEIGHT_WITHOUT_ROWS = 60;
+const COLUMN_COUNT = 7;
+// Most calendar grids have 5 rows:
+const ESTIMATED_ITEM_SIZE = GRID_HEIGHT_WITHOUT_ROWS + 5 * ROW_HEIGHT;
+
 class BpkScrollableCalendarGridList extends React.Component {
   constructor(props) {
     super(props);
 
-    this.rowRenderer = this.rowRenderer.bind(this);
-    this.renderList = this.renderList.bind(this);
+    this.outerDivRef = React.createRef();
 
     const startDate = startOfDay(startOfMonth(this.props.minDate));
     const endDate = startOfDay(startOfMonth(this.props.maxDate));
@@ -49,85 +49,112 @@ class BpkScrollableCalendarGridList extends React.Component {
       startDate,
     );
     const months = getMonthsArray(startDate, monthsCount);
+    // Here we calculate the height of each calendar grid item, so that react-window can efficiently render them
+    const monthItemHeights = [];
+    for (let i = 0; i < months.length; i += 1) {
+      const day = (months[i].getDay() + 7 - 1) % 7;
+      const monthLength = DateUtils.daysInMonth(
+        months[i].getYear(),
+        months[i].getMonth(),
+      );
+      const calendarGridSpaces = day + monthLength;
+      const rowCount = Math.ceil(calendarGridSpaces / COLUMN_COUNT);
+      monthItemHeights[i] = GRID_HEIGHT_WITHOUT_ROWS + ROW_HEIGHT * rowCount;
+    }
 
-    const cache = new CellMeasurerCache({
-      fixedWidth: true,
-      defaultHeight: 276, // most common height (in px) of BpkScrollableCalendarGrid
-    });
     this.state = {
       months,
-      cache,
+      monthItemHeights,
+      outerHeight: ESTIMATED_ITEM_SIZE,
     };
   }
 
   getHtmlElement = () =>
     typeof document !== 'undefined' ? document.querySelector('html') : {};
 
-  rowRenderer({ index, key, style, parent }) {
-    return (
-      <CellMeasurer
-        key={key}
-        cache={this.state.cache}
-        parent={parent}
-        columnIndex={0}
-        rowIndex={index}
-      >
-        <div style={style}>
-          <BpkScrollableCalendarGrid
-            onDateClick={this.props.onDateClick}
-            {...this.props}
-            key={key}
-            month={this.state.months[index]}
-            focusedDate={this.props.focusedDate}
-            preventKeyboardFocus={this.props.preventKeyboardFocus}
-            aria-hidden={index !== 1}
-            className={getClassName('bpk-scrollable-calendar-grid-list__item')}
-          />
-        </div>
-      </CellMeasurer>
-    );
-  }
-
-  renderList(width, height) {
-    return (
-      <List
-        extraData={this.props}
-        style={this.getHtmlElement().dir === 'rtl' ? { direction: 'rtl' } : {}}
-        width={width}
-        height={height}
-        deferredMeasurementCache={this.state.cache}
-        rowHeight={this.state.cache.rowHeight}
-        rowRenderer={this.rowRenderer}
-        rowCount={this.state.months.length}
-        overscanRowCount={0}
-        scrollToIndex={
-          isSameMonth(this.props.focusedDate, this.props.selectedDate)
-            ? DateUtils.differenceInCalendarMonths(
-                this.props.selectedDate,
-                this.props.minDate,
-              )
-            : DateUtils.differenceInCalendarMonths(
-                this.props.focusedDate,
-                this.props.minDate,
-              )
-        }
+  rowRenderer = ({ index, style }) => (
+    <div style={style}>
+      <BpkScrollableCalendarGrid
+        onDateClick={this.props.onDateClick}
+        {...this.props}
+        month={this.state.months[index]}
+        focusedDate={this.props.focusedDate}
+        preventKeyboardFocus={this.props.preventKeyboardFocus}
+        aria-hidden={index !== 1}
+        className={getClassName('bpk-scrollable-calendar-grid-list__item')}
       />
-    );
-  }
+    </div>
+  );
+
+  componentDidMount = () => {
+    this.findHeight();
+    const documentIfExists = typeof window !== 'undefined' ? document : null;
+    if (documentIfExists) {
+      documentIfExists.addEventListener('resize', this.findHeight);
+      documentIfExists.addEventListener('orientationchange', this.findHeight);
+      documentIfExists.addEventListener('fullscreenchange', this.findHeight);
+    }
+  };
+
+  getItemSize = index => this.state.monthItemHeights[index];
+
+  findHeight = () => {
+    const outerNode = this.outerDivRef.current;
+    if (outerNode) {
+      const newHeight = outerNode.clientHeight;
+      this.setState({ outerHeight: newHeight });
+    } else {
+      this.setState({ outerHeight: ESTIMATED_ITEM_SIZE });
+    }
+  };
+
+  calculateOffset = numberOfMonths => {
+    // Change initialScrollOffset to be correct value based on itemSizes
+    let result = 0;
+    for (let i = 0; i < numberOfMonths; i += 1) {
+      result += this.getItemSize(i);
+    }
+    return result;
+  };
 
   render() {
-    return (
+    const result = (
       <div
         className={getClassName(
           'bpk-scrollable-calendar-grid-list',
           this.props.className,
         )}
+        ref={this.outerDivRef}
       >
-        <AutoSizer>
-          {({ width, height }) => this.renderList(width, height)}
-        </AutoSizer>{' '}
+        <List
+          extraData={this.props}
+          style={
+            this.getHtmlElement().dir === 'rtl' ? { direction: 'rtl' } : {}
+          }
+          width="100%"
+          height={this.state.outerHeight}
+          estimatedItemSize={ESTIMATED_ITEM_SIZE}
+          itemSize={this.getItemSize}
+          itemCount={this.state.months.length}
+          rowCount={this.state.months.length}
+          overscanCount={1}
+          initialScrollOffset={this.calculateOffset(
+            isSameMonth(this.props.focusedDate, this.props.selectedDate)
+              ? DateUtils.differenceInCalendarMonths(
+                  this.props.selectedDate,
+                  this.props.minDate,
+                )
+              : DateUtils.differenceInCalendarMonths(
+                  this.props.focusedDate,
+                  this.props.minDate,
+                ),
+          )}
+        >
+          {this.rowRenderer}
+        </List>
       </div>
     );
+    return result;
   }
 }
 
